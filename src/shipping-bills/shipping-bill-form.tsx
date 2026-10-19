@@ -4,26 +4,22 @@ import schemeCodes from '@/data/scheme-codes'
 import { stateOptions } from '@/data/states'
 import { Trades } from '@/data/trade-agrements'
 import { cargoOptions, contractTypes, paymentTypes, priceInclusionTypes, sealTypes, weightUnits } from '@/data/types'
+import { AsyncPartySelect, BranchPath, PartyFields } from './party-selectors'
 import { BranchDialog, PartyDialog } from './party-dialogs'
 import { routes } from '@/shared/route-paths'
 import { s, useFieldArray, useForm } from 'core/form'
-import { Form, SubmitButton } from 'core/form/components'
+import { Form } from 'core/form/components'
 import { navigate, useParams } from 'core/routing'
 import { toast } from 'core/toast-manager'
-import { RrCaretDown } from 'icons/rr/fi-rr-caret-down'
 import { useEffect, useRef, useState } from 'react'
-import { getFormContext, Path, RegisterOptions, useController } from 'ui/form'
+import { Path } from 'ui/form'
 import { Button } from 'ui/basic/button'
 import { Card, CardContent, CardHeader } from 'ui/basic/card'
 import { Checkbox } from 'ui/inputs/checkbox'
-import { InputError } from 'ui/inputs/error'
 import { Input } from 'ui/inputs/input'
 import { Select } from 'ui/inputs/select'
-import { Popover, PopoverContent, PopoverTrigger } from 'ui/interactive/popover'
-import { PopoverContext } from 'ui/interactive/popover-context'
 import { Tabs, TabsList, TabsTrigger } from 'ui/interactive/tabs'
-import { clsx, getContext } from 'ui/utils'
-import { getDemoData, useDemoData } from './demo-store'
+import { useDemoData } from './demo-store'
 import { shippingBillService } from './shipping-bill-service'
 import { getMarksAndNumbersOptions, MarksAndNumbersOption } from './marks-and-numbers-source'
 import {
@@ -45,7 +41,21 @@ import {
 import { partyMockService } from './party-mock-service'
 import { workflowSteps } from './workflow'
 
-const positive = s.string().refine((value) => (Number(value) > 0 ? undefined : 'Enter a number above zero'))
+function optionalNumber(label: string, minimum = 0) {
+  return s.string().optional().refine((value) => {
+    if (value == null || !String(value).trim()) return undefined
+    const number = Number(value)
+    if (!Number.isFinite(number)) return `${label} must be a number`
+    return number >= minimum ? undefined : `${label} must be ${minimum === 0 ? 'zero or greater' : 'above zero'}`
+  })
+}
+
+const positive = s.string().refine((value) => {
+  if (value == null || !String(value).trim()) return 'This field is required'
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 'Enter a valid number'
+  return number > 0 ? undefined : 'Enter a number above zero'
+})
 
 // Leaf names are deliberate: fe-zen-arch resolves nested RHF field rules by their final path segment.
 const billSchema = s.object({
@@ -63,20 +73,20 @@ const billSchema = s.object({
   rbiWaiverNumber: s.string().optional(),
   rbiWaiverDate: s.string().optional(),
   sealType: s.string().optional(),
-  numberOfContainers: s.string().optional(),
+  numberOfContainers: optionalNumber('Number of containers'),
   natureOfCargo: s.string().optional(),
-  grossWeight: s.string().optional(),
-  netWeight: s.string().optional(),
+  grossWeight: optionalNumber('Gross weight'),
+  netWeight: optionalNumber('Net weight'),
   measurementUnit: s.string().optional(),
-  totalPackages: s.string().optional(),
+  totalPackages: optionalNumber('Total packages'),
   marksAndNumbers: s.string().optional(),
-  loosePackets: s.string().optional(),
+  loosePackets: optionalNumber('Loose packets'),
   mawbNumber: s.string().optional(),
   hawbNumber: s.string().optional(),
   invoiceNumber: s.string(),
   invoiceDate: s.string(),
   currency: s.string(),
-  invoiceTotal: s.string().refine((value) => (!value || Number(value) >= 0 ? undefined : 'Total cannot be negative')).optional(),
+  invoiceTotal: optionalNumber('Invoice total'),
   contractType: s.string(),
   buyerId: s.string().optional(),
   buyerBranchId: s.string().optional(),
@@ -92,7 +102,30 @@ const billSchema = s.object({
   packingNumberTo: s.string().optional(),
   documentTypeCode: s.string().optional(),
   documentReferenceNumber: s.string().optional(),
-  registrationNumber: s.string().optional()
+  registrationNumber: s.string().optional(),
+  freightRate: optionalNumber('Freight rate'),
+  freightAmount: optionalNumber('Freight amount'),
+  insuranceRate: optionalNumber('Insurance rate'),
+  insuranceAmount: optionalNumber('Insurance amount'),
+  commissionRate: optionalNumber('Commission rate'),
+  commissionAmount: optionalNumber('Commission amount'),
+  discountRate: optionalNumber('Discount rate'),
+  discountAmount: optionalNumber('Discount amount'),
+  otherDeductionsRate: optionalNumber('Other deductions rate'),
+  otherDeductionsAmount: optionalNumber('Other deductions amount'),
+  packingCharges: optionalNumber('Packing charges'),
+  periodOfPayment: optionalNumber('Period of payment'),
+  lineTotal: optionalNumber('Item total'),
+  presentMarketValue: optionalNumber('Present market value'),
+  numberOfUnits: optionalNumber('Number of units'),
+  drawbackQuantity: optionalNumber('Drawback quantity'),
+  totalPackage: optionalNumber('Total package'),
+  taxableValue: optionalNumber('Taxable value'),
+  igstAmount: optionalNumber('IGST amount'),
+  totalDbkAmount: optionalNumber('Total drawback amount'),
+  rodtep: optionalNumber('RODTEP'),
+  rodtepAmount: optionalNumber('RODTEP amount'),
+  cess: optionalNumber('Cess')
 })
 
 type BillFormContext = ReturnType<typeof useForm<ShippingBillFormValues>>
@@ -103,13 +136,6 @@ interface QuickAdd {
   invoiceIndex?: number
   itemIndex?: number
 }
-
-type BranchPath =
-  | 'exporterBranchId'
-  | 'consigneeBranchId'
-  | `invoices.${number}.buyerBranchId`
-  | `invoices.${number}.thirdPartyBranchId`
-  | `invoices.${number}.items.${number}.itemThirdPartyBranchId`
 
 interface QuickBranch {
   kind: 'exporter' | 'business'
@@ -165,327 +191,6 @@ function PersistentTab({ value, activeTab, children, className }: PersistentTabP
   return (
     <div role="tabpanel" hidden={activeTab !== value} className={`mt-3 ${className}`}>
       {children}
-    </div>
-  )
-}
-
-interface AsyncOption {
-  value: string
-  label: string
-  sublabel?: string
-}
-
-interface AsyncPartySelectProps {
-  name: Path<ShippingBillFormValues>
-  placeholder?: string
-  disabled?: boolean
-  className?: string
-  rules?: RegisterOptions
-  deps?: React.DependencyList
-  fetchOptions: (query: string) => Promise<AsyncOption[]>
-  getInitialLabel?: (id: string) => Promise<string>
-}
-
-function AsyncPartySelect({
-  name,
-  placeholder = 'Search...',
-  disabled = false,
-  className,
-  rules,
-  deps = [],
-  fetchOptions,
-  getInitialLabel
-}: AsyncPartySelectProps) {
-  const ctx = getFormContext()
-  const {
-    field: { onChange, value, ref }
-  } = useController({
-    name,
-    control: ctx.hooks.control,
-    rules: ctx.schema.shape[name] ?? rules,
-    disabled
-  })
-
-  const [query, setQuery] = useState('')
-  const [options, setOptions] = useState<AsyncOption[]>([])
-  const [loading, setLoading] = useState(false)
-  const [selectedLabel, setSelectedLabel] = useState('')
-  const [isOpen, setIsOpen] = useState(false)
-
-  const fetchOptionsRef = useRef(fetchOptions)
-  fetchOptionsRef.current = fetchOptions
-
-  const getInitialLabelRef = useRef(getInitialLabel)
-  getInitialLabelRef.current = getInitialLabel
-
-  // Fetch label when selected value changes or on mount
-  useEffect(() => {
-    let active = true
-    if (value) {
-      if (getInitialLabelRef.current) {
-        void getInitialLabelRef.current(String(value)).then((lbl) => {
-          if (active && lbl) setSelectedLabel(lbl)
-        })
-      } else {
-        const found = options.find((o) => o.value === String(value))
-        if (found) setSelectedLabel(found.label)
-      }
-    } else {
-      setSelectedLabel('')
-    }
-    return () => {
-      active = false
-    }
-  }, [value, ...deps])
-
-  // Fetch search results asynchronously whenever query changes or popover opens
-  useEffect(() => {
-    if (!isOpen && !query) return
-
-    let active = true
-    setLoading(true)
-    const timer = setTimeout(() => {
-      void fetchOptionsRef
-        .current(query)
-        .then((results) => {
-          if (active) {
-            setOptions(results)
-            setLoading(false)
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setOptions([])
-            setLoading(false)
-          }
-        })
-    }, 200)
-
-    return () => {
-      active = false
-      clearTimeout(timer)
-    }
-  }, [query, isOpen, ...deps])
-
-  return (
-    <div>
-      <input type="hidden" name={name} value={value ?? ''} ref={ref} disabled={disabled} />
-      <Popover
-        placement="bottom-start"
-        fallbackPlacements={['top-start']}
-        onOpenCallback={(open) => setIsOpen(open)}>
-        <PopoverTrigger
-          className={clsx(
-            'outline-focus-select group flex w-full cursor-pointer items-center justify-between rounded border border-gray-200 pr-2 hover:border-gray-300 disabled:cursor-not-allowed disabled:opacity-50',
-            `${className || 'bg-white'}${disabled ? ' cursor-not-allowed opacity-50' : ''}`
-          )}
-          disabled={disabled}>
-          <div className="flex items-center p-2 text-sm">
-            <span className={selectedLabel ? 'font-medium text-gray-900' : 'text-gray-400'}>
-              {selectedLabel || placeholder}
-            </span>
-          </div>
-          <RrCaretDown className="size-4 text-gray-400 transition-transform group-data-[state=open]:rotate-180" />
-        </PopoverTrigger>
-        <InputError<ShippingBillFormValues> name={name} />
-        <PopoverContent className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
-          <div className="border-b border-gray-100 p-2">
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Type to search..."
-              className="focus:border-primary-500 focus:ring-primary-500 w-full rounded border border-gray-200 px-2.5 py-1.5 text-sm outline-none focus:ring-1"
-              autoFocus
-            />
-          </div>
-          <div className="max-h-56 overflow-y-auto p-1">
-            {loading ? (
-              <div className="p-3 text-center text-xs text-gray-500">Searching mock service...</div>
-            ) : options.length === 0 ? (
-              <div className="p-3 text-center text-xs text-gray-400">No matching results found</div>
-            ) : (
-              options.map((opt) => (
-                <PopoverOptionItem
-                  key={opt.value}
-                  option={opt}
-                  isSelected={String(value) === opt.value}
-                  onSelect={(selected) => {
-                    onChange(selected.value)
-                    ctx.hooks.setValue(name, selected.value, {
-                      shouldValidate: true,
-                      shouldDirty: true,
-                      shouldTouch: true
-                    })
-                    setSelectedLabel(selected.label)
-                    setQuery('')
-                  }}
-                />
-              ))
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-    </div>
-  )
-}
-
-function PopoverOptionItem({
-  option,
-  isSelected,
-  onSelect
-}: {
-  option: AsyncOption
-  isSelected: boolean
-  onSelect: (opt: AsyncOption) => void
-}) {
-  const { setOpen } = getContext(PopoverContext)
-
-  return (
-    <div
-      onClick={() => {
-        onSelect(option)
-        setOpen(false)
-      }}
-      className={clsx(
-        'flex cursor-pointer flex-col rounded p-2 text-sm transition-colors',
-        isSelected ? 'bg-primary-50 text-primary-900 font-semibold' : 'text-gray-950 hover:bg-gray-100'
-      )}>
-      <span>{option.label}</span>
-      {option.sublabel && <span className="text-xs text-gray-500">{option.sublabel}</span>}
-    </div>
-  )
-}
-
-function PartyFields({
-  formCtx,
-  ownerName,
-  branchName,
-  label,
-  kind,
-  parties,
-  required = true,
-  onAddBranch,
-  onQuickAdd
-}: {
-  formCtx: BillFormContext
-  ownerName:
-  | 'exporterId'
-  | 'consigneeId'
-  | `invoices.${number}.buyerId`
-  | `invoices.${number}.thirdPartyId`
-  | `invoices.${number}.items.${number}.itemThirdPartyId`
-  branchName: BranchPath
-  label: string
-  kind: 'exporter' | 'business'
-  parties: (Exporter | Business)[]
-  required?: boolean
-  onAddBranch: (ownerId: number) => void
-  onQuickAdd: () => void
-}) {
-  const ownerId = formCtx.hooks.watch(ownerName)
-  const { exporters, businesses } = getDemoData()
-  const owner =
-    kind === 'exporter'
-      ? (exporters.find((party) => String(party.id) === ownerId) ??
-        parties.find((party) => String(party.id) === ownerId))
-      : (businesses.find((party) => String(party.id) === ownerId) ??
-        parties.find((party) => String(party.id) === ownerId))
-
-  useEffect(() => {
-    const selectedBranch = formCtx.hooks.getValues(branchName)
-    if (
-      selectedBranch &&
-      owner &&
-      owner.branches.length > 0 &&
-      !owner.branches.some((branch) => String(branch.id) === selectedBranch)
-    ) {
-      formCtx.hooks.setValue(branchName, '', { shouldValidate: true })
-    }
-  }, [branchName, formCtx.hooks, owner])
-
-  return (
-    <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-      <div>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="text-sm font-medium">{label}</span>
-          <button type="button" className="text-primary-700 text-xs font-medium hover:underline" onClick={onQuickAdd}>
-            + Add new
-          </button>
-        </div>
-        <AsyncPartySelect
-          name={ownerName}
-          placeholder={`Search & select ${kind}...`}
-          rules={{ required }}
-          fetchOptions={async (query) => {
-            if (kind === 'exporter') {
-              const res = await partyMockService.searchExporters(query)
-              return res.map((item) => ({
-                value: String(item.id),
-                label: item.name,
-                sublabel: item.iec ? `IEC: ${item.iec}` : undefined
-              }))
-            } else {
-              const res = await partyMockService.searchConsignees(query)
-              return res.map((item) => ({
-                value: String(item.id),
-                label: item.name
-              }))
-            }
-          }}
-          getInitialLabel={async (id) => {
-            if (kind === 'exporter') {
-              const item = await partyMockService.getExporterById(id)
-              return item ? item.name : ''
-            } else {
-              const item = await partyMockService.getConsigneeById(id)
-              return item ? item.name : ''
-            }
-          }}
-        />
-      </div>
-      <div>
-        <div className="mb-1 flex items-center justify-between gap-2">
-          <span className="text-sm font-medium">Branch / address</span>
-          {owner && (
-            <button
-              type="button"
-              className="text-primary-700 text-xs font-medium hover:underline"
-              onClick={() => onAddBranch(owner.id)}>
-              + Add branch
-            </button>
-          )}
-        </div>
-        <AsyncPartySelect
-          name={branchName}
-          placeholder={owner ? 'Search & select branch...' : `Choose ${kind} first`}
-          disabled={!owner}
-          rules={{ required: required || !!ownerId }}
-          deps={[ownerId]}
-          fetchOptions={async (query) => {
-            if (!ownerId) return []
-            if (kind === 'exporter') {
-              const res = await partyMockService.searchExporterBranches(ownerId, query)
-              return res.map((branch) => ({
-                value: String(branch.id),
-                label: `${branch.branchName} · ${branch.city}`,
-                sublabel: branch.address1
-              }))
-            } else {
-              const res = await partyMockService.searchConsigneeBranches(ownerId, query)
-              return res.map((branch) => ({
-                value: String(branch.id),
-                label: `${branch.branchName} · ${branch.city}`,
-                sublabel: branch.address1
-              }))
-            }
-          }}
-          getInitialLabel={async (id) => {
-            const branch = owner?.branches.find((b) => String(b.id) === id)
-            return branch ? `${branch.branchName} · ${branch.city}` : ''
-          }}
-        />
-      </div>
     </div>
   )
 }
@@ -1127,7 +832,7 @@ function DocumentItem({ formCtx, index, onRemove }: { formCtx: BillFormContext; 
 function BillEditor({ bill }: { bill?: SavedBill }) {
   const { exporters, businesses } = useDemoData()
   const formCtx = useForm<ShippingBillFormValues>(billSchema, { defaultValues: bill?.values ?? emptyBill() })
-  const { register, control, setValue, formState } = formCtx.hooks
+  const { register, control, setValue, setError, clearErrors, setFocus, trigger, getValues, formState } = formCtx.hooks
   const values = formCtx.hooks.watch()
   const { fields: invoices, append: addInvoice, remove: removeInvoice } = useFieldArray({ control, name: 'invoices' })
   const {
@@ -1213,7 +918,199 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
     // else: keep user on whichever tab they submitted from
   }, [formState.submitCount, formState.errors])
 
+  function getSectionFields(section: 'details' | 'invoices' | 'documents'): Path<ShippingBillFormValues>[] {
+    if (section === 'details') {
+      return [
+        'jobDate',
+        'exporterId',
+        'exporterBranchId',
+        'consigneeId',
+        'consigneeBranchId',
+        'loadingPort',
+        'finalDestinationPort',
+        'dischargePort',
+        'originStateCode',
+        'nfeiCategory',
+        'rbiWaiverNumber',
+        'rbiWaiverDate',
+        'sealType',
+        'numberOfContainers',
+        'natureOfCargo',
+        'grossWeight',
+        'netWeight',
+        'measurementUnit',
+        'totalPackages',
+        'marksAndNumbers',
+        'loosePackets',
+        'mawbNumber',
+        'hawbNumber'
+      ]
+    }
+
+    if (section === 'invoices') {
+      return values.invoices.flatMap((invoice, index) => [
+        `invoices.${index}.invoiceNumber`,
+        `invoices.${index}.invoiceDate`,
+        `invoices.${index}.currency`,
+        `invoices.${index}.invoiceTotal`,
+        `invoices.${index}.contractType`,
+        `invoices.${index}.buyerId`,
+        `invoices.${index}.buyerBranchId`,
+        `invoices.${index}.thirdPartyId`,
+        `invoices.${index}.thirdPartyBranchId`,
+        ...invoice.items.flatMap((_, itemIndex) => [
+          `invoices.${index}.items.${itemIndex}.ritcCode`,
+          `invoices.${index}.items.${itemIndex}.goodsDescription1`,
+          `invoices.${index}.items.${itemIndex}.quantity`,
+          `invoices.${index}.items.${itemIndex}.unitOfMeasurement`,
+          `invoices.${index}.items.${itemIndex}.unitPrice`,
+          `invoices.${index}.items.${itemIndex}.lineTotal`,
+          `invoices.${index}.items.${itemIndex}.itemThirdPartyId`,
+          `invoices.${index}.items.${itemIndex}.itemThirdPartyBranchId`
+        ])
+      ]) as Path<ShippingBillFormValues>[]
+    }
+
+    return [
+      ...containers.flatMap((_, index) => [`containers.${index}.containerNumber`, `containers.${index}.containerSize`]),
+      ...packingRanges.flatMap((_, index) => [
+        `packingRanges.${index}.packingNumberFrom`,
+        `packingRanges.${index}.packingNumberTo`,
+        `packingRanges.${index}.packingCode`
+      ]),
+      ...documents.flatMap((_, index) => [
+        `documents.${index}.documentTypeCode`,
+        `documents.${index}.documentReferenceNumber`,
+        `documents.${index}.invoiceSerialNumber`,
+        `documents.${index}.itemSerialNumber`
+      ]),
+      ...licenses.flatMap((_, index) => [
+        `licenses.${index}.registrationNumber`,
+        `licenses.${index}.licenseQuantity`,
+        `licenses.${index}.licenseExportQuantity`
+      ])
+    ] as Path<ShippingBillFormValues>[]
+  }
+
+  function validateBranch(
+    ownerId: string | undefined,
+    branchId: string | undefined,
+    parties: (Exporter | Business)[],
+    path: Path<ShippingBillFormValues>
+  ) {
+    if (!ownerId || !branchId) return true
+    const owner = parties.find((party) => String(party.id) === ownerId)
+    const valid = owner?.branches.some((branch) => String(branch.id) === branchId) ?? false
+    if (!valid) {
+      setError(path, { type: 'validate', message: 'Select a branch belonging to the selected party' })
+      return false
+    }
+    return true
+  }
+
+  function validateRelationships(section: 'details' | 'invoices' | 'all') {
+    const current = getValues()
+    const paths: Path<ShippingBillFormValues>[] = [
+      'exporterBranchId',
+      'consigneeBranchId',
+      ...(current.invoices.flatMap((invoice, index) => [
+        `invoices.${index}.buyerBranchId`,
+        `invoices.${index}.thirdPartyBranchId`,
+        ...invoice.items.map(
+          (_, itemIndex) => `invoices.${index}.items.${itemIndex}.itemThirdPartyBranchId` as Path<ShippingBillFormValues>
+        )
+      ]) as Path<ShippingBillFormValues>[])
+    ]
+    clearErrors(paths)
+
+    let firstInvalid: Path<ShippingBillFormValues> | undefined
+    const check = (valid: boolean, path: Path<ShippingBillFormValues>) => {
+      if (!valid && firstInvalid == null) firstInvalid = path
+    }
+
+    if (section === 'details' || section === 'all') {
+      check(
+        validateBranch(current.exporterId, current.exporterBranchId, exporters, 'exporterBranchId'),
+        'exporterBranchId'
+      )
+      check(
+        validateBranch(current.consigneeId, current.consigneeBranchId, businesses, 'consigneeBranchId'),
+        'consigneeBranchId'
+      )
+    }
+
+    if (section === 'invoices' || section === 'all') {
+      current.invoices.forEach((invoice, index) => {
+        const enteredTotal = invoice.invoiceTotal?.trim()
+        const calculatedTotal = invoiceTotal(invoice)
+        if (
+          enteredTotal &&
+          Number.isFinite(calculatedTotal) &&
+          Math.abs(Number(enteredTotal) - calculatedTotal) > 0.01
+        ) {
+          const path = `invoices.${index}.invoiceTotal` as Path<ShippingBillFormValues>
+          setError(path, { type: 'validate', message: 'Invoice total must match the item totals' })
+          check(false, path)
+        }
+        if (!invoice.buyerSameAsConsignee) {
+          check(
+            validateBranch(
+              invoice.buyerId,
+              invoice.buyerBranchId,
+              businesses,
+              `invoices.${index}.buyerBranchId`
+            ),
+            `invoices.${index}.buyerBranchId`
+          )
+        }
+        check(
+          validateBranch(
+            invoice.thirdPartyId,
+            invoice.thirdPartyBranchId,
+            businesses,
+            `invoices.${index}.thirdPartyBranchId`
+          ),
+          `invoices.${index}.thirdPartyBranchId`
+        )
+        invoice.items.forEach((item, itemIndex) => {
+          if (item.thirdPartyItem) {
+            check(
+              validateBranch(
+                item.itemThirdPartyId,
+                item.itemThirdPartyBranchId,
+                businesses,
+                `invoices.${index}.items.${itemIndex}.itemThirdPartyBranchId`
+              ),
+              `invoices.${index}.items.${itemIndex}.itemThirdPartyBranchId`
+            )
+          }
+        })
+      })
+    }
+
+    return firstInvalid
+  }
+
+  async function validateSection(section: 'details' | 'invoices' | 'documents') {
+    const valid = await trigger(getSectionFields(section), { shouldFocus: true })
+    const relationshipError =
+      section === 'details' || section === 'invoices' ? validateRelationships(section) : undefined
+    if (!valid || relationshipError) {
+      if (relationshipError) setFocus(relationshipError)
+      toast.error('Please fix the highlighted fields before continuing')
+      return false
+    }
+    return true
+  }
+
   async function handleSave(data: ShippingBillFormValues) {
+    const relationshipError = validateRelationships('all')
+    if (relationshipError) {
+      setActiveTab(relationshipError.startsWith('invoices.') ? 'invoices' : 'details')
+      setFocus(relationshipError)
+      toast.error('Please fix the highlighted fields before saving')
+      return
+    }
     try {
       const result = await shippingBillService.save(data, draftId)
       setDraftId(result.bill.id)
@@ -1257,10 +1154,6 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
       setValue(`invoices.${quickAdd.invoiceIndex}.${field}BranchId`, String(branchId), { shouldValidate: true })
     }
   }
-
-  const exporter = exporters.find((item) => String(item.id) === values.exporterId)
-  const consignee = businesses.find((item) => String(item.id) === values.consigneeId)
-  const totalLines = values.invoices.reduce((sum, invoice) => sum + invoice.items.length, 0)
 
   return (
     <div className="space-y-5">
@@ -1703,9 +1596,9 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
             {activeTab !== 'documents' ? (
               <Button
                 type="button"
-                onClick={(e) => {
-                  e.preventDefault()
-                  const current = formCtx.hooks.getValues()
+                onClick={async () => {
+                  if (!(await validateSection(activeTab as 'details' | 'invoices' | 'documents'))) return
+                  const current = getValues()
                   const saved = shippingBillService.saveDraft(current, draftId)
                   setDraftId(saved.id)
                   toast.success('Details saved')

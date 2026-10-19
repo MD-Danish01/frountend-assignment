@@ -1,5 +1,5 @@
 import { emptyBill, emptyInvoice, SavedBill, ShippingBillFormValues } from './model'
-import { getDemoData, saveBill as saveLocalBill, syncBillsFromApi } from './demo-store'
+import { getDemoData, saveBill as saveLocalBill } from './demo-store'
 
 const BASE_URL =
   import.meta.env.VITE_BASE_URL ||
@@ -117,8 +117,8 @@ export function toHttpShippingBillPayload(values: ShippingBillFormValues) {
   }
 }
 
-export function normalizeApiBill(raw: any): SavedBill {
-  if (!raw) return { id: 0, created: '', updated: '', values: emptyBill() }
+export function normalizeApiBill(raw: any): SavedBill | undefined {
+  if (!raw) return undefined
   const formatIsoString = (val: any) => {
     if (!val) return new Date().toISOString()
     if (typeof val === 'number') {
@@ -131,8 +131,11 @@ export function normalizeApiBill(raw: any): SavedBill {
   }
 
   if (raw.values && raw.id) {
+    const id = Number(raw.id)
+    if (!Number.isSafeInteger(id) || id <= 0) return undefined
     return {
       ...raw,
+      id,
       updated: formatIsoString(raw.updated),
       created: formatIsoString(raw.created)
     } as SavedBill
@@ -146,7 +149,8 @@ export function normalizeApiBill(raw: any): SavedBill {
     return String(days || '')
   }
 
-  const id = Number(raw.id ?? raw.shippingBillId ?? raw.chaId ?? Math.floor(Math.random() * 100000))
+  const id = Number(raw.id ?? raw.shippingBillId ?? raw.chaId)
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined
   const jobDateStr = formatEpochDays(raw.jobDate)
   const updated = formatIsoString(raw.updatedAt || raw.updated || raw.createdAt)
   const created = formatIsoString(raw.createdAt || raw.created || updated)
@@ -259,7 +263,7 @@ export function normalizeApiBills(raw: any): SavedBill[] {
           : Array.isArray(raw.items)
             ? raw.items
             : []
-  return list.map(normalizeApiBill)
+  return list.map(normalizeApiBill).filter((bill: SavedBill | undefined): bill is SavedBill => bill != null)
 }
 
 export function generateFlatFileContent(bill: SavedBill): string {
@@ -349,7 +353,8 @@ export const API_SEED_SHIPPING_BILLS = [
   { id: 1028, jobNumber: 150033, jobDate: 20714, exporterName: "Amit Exports", consigneeName: "H&M HENNES & MAURITZ LTD", loadingPort: "INMUN1", dischargePort: "INMUN1", destinationPort: "USMSY", updated: 1791452556 }
 ]
 
-let internalBills: SavedBill[] = normalizeApiBills(API_SEED_SHIPPING_BILLS)
+const seedBills: SavedBill[] = normalizeApiBills(API_SEED_SHIPPING_BILLS)
+let apiBills: SavedBill[] = []
 
 function mergeBills(...sources: SavedBill[][]): SavedBill[] {
   const byId = new Map<number, SavedBill>()
@@ -373,7 +378,7 @@ export const shippingBillService = {
    * For a duplicate ID, the later source wins: local drafts override seed data.
    */
   getInitialBills(): SavedBill[] {
-    return mergeBills(internalBills, getDemoData().bills)
+    return mergeBills(seedBills, apiBills, getDemoData().bills)
   },
 
   /**
@@ -388,8 +393,13 @@ export const shippingBillService = {
    * The returned ID is stable across subsequent edits and page refreshes.
    */
   saveDraft(values: ShippingBillFormValues, id?: number): SavedBill {
-    const bill = saveLocalBill(values, id)
-    internalBills = mergeBills(internalBills, [bill])
+    const nextId =
+      id ??
+      Math.max(
+        3000,
+        ...this.getInitialBills().map((bill) => bill.id)
+      ) + 1
+    const bill = saveLocalBill(values, nextId)
     return bill
   },
 
@@ -422,14 +432,13 @@ export const shippingBillService = {
       if (response.ok) {
         const data = await response.json()
         const normalized = normalizeApiBills(data)
-        internalBills = mergeBills(internalBills, normalized)
-        if (normalized.length > 0) syncBillsFromApi(normalized)
-        return mergeBills(internalBills, getDemoData().bills)
+        apiBills = normalized
+        return this.getInitialBills()
       }
     } catch {
       // Fallback to internal API seed records
     }
-    return mergeBills(internalBills, getDemoData().bills)
+    return this.getInitialBills()
   },
 
 
