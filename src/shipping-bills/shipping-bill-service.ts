@@ -1,4 +1,5 @@
 import { emptyBill, emptyInvoice, SavedBill, ShippingBillFormValues } from './model'
+import { getDemoData, saveBill as saveLocalBill, syncBillsFromApi } from './demo-store'
 
 const BASE_URL =
   import.meta.env.VITE_BASE_URL ||
@@ -350,24 +351,67 @@ export const API_SEED_SHIPPING_BILLS = [
 
 let internalBills: SavedBill[] = normalizeApiBills(API_SEED_SHIPPING_BILLS)
 
+function mergeBills(...sources: SavedBill[][]): SavedBill[] {
+  const byId = new Map<number, SavedBill>()
+  for (const source of sources) {
+    for (const bill of source) {
+      byId.set(bill.id, bill)
+    }
+  }
+  return Array.from(byId.values())
+}
+
+export interface ShippingBillSaveResult {
+  bill: SavedBill
+  remote: 'synced' | 'unavailable'
+  remoteError?: Error
+}
+
 export const shippingBillService = {
   /**
-   * Return initial in-memory bills
+   * Return the combined seed and localStorage-backed bill collection.
+   * For a duplicate ID, the later source wins: local drafts override seed data.
    */
   getInitialBills(): SavedBill[] {
-    return internalBills
+    return mergeBills(internalBills, getDemoData().bills)
   },
 
   /**
-   * Find bill by id
+   * Find a bill in the same combined collection used by list().
    */
   getById(id: string | number): SavedBill | undefined {
-    return internalBills.find((b) => String(b.id) === String(id))
+    return this.getInitialBills().find((b) => String(b.id) === String(id))
   },
 
   /**
-   * GET /api/shipping-bills
-   * List all shipping bills (per shipping_bill.http)
+   * Save a draft locally without requiring the backend.
+   * The returned ID is stable across subsequent edits and page refreshes.
+   */
+  saveDraft(values: ShippingBillFormValues, id?: number): SavedBill {
+    const bill = saveLocalBill(values, id)
+    internalBills = mergeBills(internalBills, [bill])
+    return bill
+  },
+
+  /**
+   * Save locally first, then attempt the optional backend upsert.
+   * Local success is never reported as remote success when the request fails.
+   */
+  async save(values: ShippingBillFormValues, id?: number): Promise<ShippingBillSaveResult> {
+    const bill = this.saveDraft(values, id)
+    try {
+      await this.upsert(values)
+      return { bill, remote: 'synced' }
+    } catch (error) {
+      const remoteError = error instanceof Error ? error : new Error(String(error))
+      return { bill, remote: 'unavailable', remoteError }
+    }
+  },
+
+  /**
+   * GET /api/shipping-bills.
+   * A successful empty response is valid; seed and local records remain available.
+   * A failed request also preserves local drafts and the in-memory seed fallback.
    */
   async list(): Promise<SavedBill[]> {
     try {
@@ -378,15 +422,14 @@ export const shippingBillService = {
       if (response.ok) {
         const data = await response.json()
         const normalized = normalizeApiBills(data)
-        if (normalized && normalized.length > 0) {
-          internalBills = normalized
-          return normalized
-        }
+        internalBills = mergeBills(internalBills, normalized)
+        if (normalized.length > 0) syncBillsFromApi(normalized)
+        return mergeBills(internalBills, getDemoData().bills)
       }
     } catch {
       // Fallback to internal API seed records
     }
-    return internalBills
+    return mergeBills(internalBills, getDemoData().bills)
   },
 
 
@@ -487,4 +530,3 @@ export const shippingBillService = {
     return response.json()
   }
 }
-

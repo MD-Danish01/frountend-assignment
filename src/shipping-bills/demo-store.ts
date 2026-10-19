@@ -639,12 +639,11 @@ export function saveBill(values: ShippingBillFormValues, id?: number) {
 export function syncBillsFromApi(apiBills: SavedBill[]) {
   if (!apiBills || !apiBills.length) return
   const existingMap = new Map<number, SavedBill>()
-  // Put existing bills first
-  for (const b of snapshot.bills) {
+  // Put API bills first, then preserve local drafts with the same stable ID.
+  for (const b of apiBills) {
     existingMap.set(b.id, b)
   }
-  // Overlay/add API bills
-  for (const b of apiBills) {
+  for (const b of snapshot.bills) {
     existingMap.set(b.id, b)
   }
   publish({

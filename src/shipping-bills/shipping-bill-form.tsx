@@ -12,7 +12,7 @@ import { navigate, useParams } from 'core/routing'
 import { toast } from 'core/toast-manager'
 import { RrCaretDown } from 'icons/rr/fi-rr-caret-down'
 import { useEffect, useRef, useState } from 'react'
-import { getFormContext, RegisterOptions, useController } from 'ui/form'
+import { getFormContext, Path, RegisterOptions, useController } from 'ui/form'
 import { Button } from 'ui/basic/button'
 import { Card, CardContent, CardHeader } from 'ui/basic/card'
 import { Checkbox } from 'ui/inputs/checkbox'
@@ -23,7 +23,7 @@ import { Popover, PopoverContent, PopoverTrigger } from 'ui/interactive/popover'
 import { PopoverContext } from 'ui/interactive/popover-context'
 import { Tabs, TabsList, TabsTrigger } from 'ui/interactive/tabs'
 import { clsx, getContext } from 'ui/utils'
-import { getDemoData, saveBill, useDemoData } from './demo-store'
+import { getDemoData, useDemoData } from './demo-store'
 import { shippingBillService } from './shipping-bill-service'
 import { getMarksAndNumbersOptions, MarksAndNumbersOption } from './marks-and-numbers-source'
 import {
@@ -176,7 +176,7 @@ interface AsyncOption {
 }
 
 interface AsyncPartySelectProps {
-  name: string
+  name: Path<ShippingBillFormValues>
   placeholder?: string
   disabled?: boolean
   className?: string
@@ -277,8 +277,7 @@ function AsyncPartySelect({
         <PopoverTrigger
           className={clsx(
             'outline-focus-select group flex w-full cursor-pointer items-center justify-between rounded border border-gray-200 pr-2 hover:border-gray-300 disabled:cursor-not-allowed disabled:opacity-50',
-            className || 'bg-white',
-            disabled && 'cursor-not-allowed opacity-50'
+            `${className || 'bg-white'}${disabled ? ' cursor-not-allowed opacity-50' : ''}`
           )}
           disabled={disabled}>
           <div className="flex items-center p-2 text-sm">
@@ -288,7 +287,7 @@ function AsyncPartySelect({
           </div>
           <RrCaretDown className="size-4 text-gray-400 transition-transform group-data-[state=open]:rotate-180" />
         </PopoverTrigger>
-        <InputError name={name} />
+        <InputError<ShippingBillFormValues> name={name} />
         <PopoverContent className="overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
           <div className="border-b border-gray-100 p-2">
             <input
@@ -1216,20 +1215,18 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
 
   async function handleSave(data: ShippingBillFormValues) {
     try {
-      const saved = saveBill(data, draftId)
-      setDraftId(saved.id)
-      console.log('Shipping bill save payload', saved.payload)
+      const result = await shippingBillService.save(data, draftId)
+      setDraftId(result.bill.id)
+      console.log('Shipping bill save payload', result.bill.payload)
 
-      // Submit payload to backend API (POST /api/shipping-bills from shipping_bill.http)
-      try {
-        const apiResult = await shippingBillService.upsert(data)
-        console.log('API response from POST /api/shipping-bills:', apiResult)
-      } catch (apiErr) {
-        console.log('Backend API sync notice (saved locally):', apiErr)
+      if (result.remote === 'synced') {
+        toast.success(bill ? 'Shipping bill updated' : 'Shipping bill created')
+      } else {
+        toast.success(
+          `${bill ? 'Shipping bill updated' : 'Shipping bill created'} locally; backend sync is unavailable`
+        )
       }
-
-      toast.success(bill ? 'Shipping bill updated' : 'Shipping bill created')
-      navigate(routes.toShippingBillEdit(saved.id))
+      navigate(routes.toShippingBillEdit(result.bill.id))
     } catch (err: any) {
       console.error('Error saving shipping bill:', err)
       toast.error('Failed to save shipping bill')
@@ -1696,7 +1693,7 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
                 type="button"
                 onClick={() => {
                   const current = formCtx.hooks.getValues()
-                  const saved = saveBill(current, draftId)
+                  const saved = shippingBillService.saveDraft(current, draftId)
                   setDraftId(saved.id)
                   setActiveTab(activeTab === 'documents' ? 'invoices' : 'details')
                 }}>
@@ -1709,7 +1706,7 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
                 onClick={(e) => {
                   e.preventDefault()
                   const current = formCtx.hooks.getValues()
-                  const saved = saveBill(current, draftId)
+                  const saved = shippingBillService.saveDraft(current, draftId)
                   setDraftId(saved.id)
                   toast.success('Details saved')
                   setActiveTab(activeTab === 'details' ? 'invoices' : 'documents')
@@ -1748,8 +1745,7 @@ function BillEditor({ bill }: { bill?: SavedBill }) {
 
 export default function ShippingBillPage() {
   const { id } = useParams<{ id?: string }>()
-  const { bills } = useDemoData()
-  const bill = id ? (bills.find((item) => item.id === Number(id)) || shippingBillService.getById(id)) : undefined
+  const bill = id ? shippingBillService.getById(id) : undefined
   if (id && !bill)
     return (
       <div className="space-y-3">
